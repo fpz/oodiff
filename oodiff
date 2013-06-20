@@ -2,8 +2,9 @@
 #
 #   Copyright
 #
-#	Copyright (C) 2009-2010 Jari Aalto <jari.aalto@cante.net>
-#	Copyright (C) 2008 Matthieu Moy <Matthieu.Moy@imag.fr>
+#       Copyright (C) 2013 Francesco Pizzolante <fpz@missioncriticalit.com>
+#       Copyright (C) 2009-2010 Jari Aalto <jari.aalto@cante.net>
+#       Copyright (C) 2008 Matthieu Moy <Matthieu.Moy@imag.fr>
 #
 #   License
 #
@@ -47,14 +48,11 @@ NAME
     $PROGRAM - Diff Open Document files
 
 SYNOPSIS
-    [debug=1] $PROGRAM [options] FILE1 [FILE2]
+    [debug=1] $PROGRAM [options] FILE1 FILE2
 
 DESCRIPTION
    Show difference of openoffice documents as plain text ASCII.
-   If FILE2 is not provided, $PROGRAM will search for an svn base
-   file, and show the diff against the last commited version in SVN.
-
-   Depends on program odt2txt being installed.
+   Requires odt2txt to be installed.
 
 OPTIONS
     Options are same as in diff(1) command.
@@ -72,9 +70,13 @@ EXAMPLES
 
         [debug=1] GIT_EXTERNAL_DIFF=oodiff git diff file.odt
 
+    To use from Subversion:
+        svn diff --diff-cmd=oodiff --force file.odt
+
 AUTHORS
     Original author is Matthieu Moy <Matthieu.Moy@imag.fr>
     Major cleanup by Jari Aalto <jari.aalto@cante.net>
+    Adapt in order to be used with --diff-cmd option of svn by Francesco Pizzolante <fpz@missioncriticalit.com>
 
 AVAILABILITY
     http://www-verimag.imag.fr/~moy/opendocument/
@@ -102,81 +104,88 @@ Main ()
     file2=""
 
     while test $# -ne 0; do
-	case "$1" in
-	    --help|-h)
-		usage
-		exit 0
-		;;
-	    -*)
-		opts="$opts $1"
-		;;
-	    *)
-		if [ ! "$file1" ]; then
-		    file1=$1
-		elif [ ! "$file2" ]; then
-		    file2=$1
-		else
-		    usage
-		    exit 1
-		fi
-		;;
-	esac
-	shift
+        case "$1" in
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            -L)
+                if [ ! "$label1" ]; then
+                    shift
+                    label1=$1
+                elif [ ! "$label2" ]; then
+                    shift
+                    label2=$1
+                else
+                    usage
+                    exit 1
+                fi
+                ;;
+            -w)
+                if [ "$opts" != "*-u*" ]; then
+                    opts="$opts -u"
+                fi
+                ;;
+            -*)
+                opts="$opts $1"
+                ;;
+            *)
+                if [ ! "$file1" ]; then
+                    file1=$1
+                elif [ ! "$file2" ]; then
+                    file2=$1
+                else
+                    usage
+                    exit 1
+                fi
+                ;;
+        esac
+        shift
     done
 
     if [ ! "$file1" ]; then
-	Die "missing FILE1 argument."
+        Die "missing FILE1 and FILE2 argument."
     fi
-
-    svnfile="$(dirname "$file1")/.svn/text-base/${file1##*/}.svn-base"
 
     if [ ! "$file2" ]; then
-        if [ -f "$svnfile" ]; then
-	    file2="$file1"
-	    file1="$svnfile"
-        else
-	    Die "missing FILE2 argument" \
-		"(tried SVN base file, but it doesn't exist: $svnfile)"
+        Die "missing FILE2 argument."
+    fi
+
+    if [ ! "$label1" ]; then
+        label1=$file1
+    fi
+
+    if [ ! "$label2" ]; then
+        label1=$file2
+    fi
+
+    ft1=$(mktemp /tmp/oodiff.$$.1.XXXXXXXXXX) \
+        || ft1="/tmp/oodiff.$$.1"
+
+    ft2=$(mktemp /tmp/oodiff.$$.2.XXXXXXXXXX) \
+        || ft2="/tmp/oodiff.$$.2"
+
+    trap 'clean_up; exit 0' 1 2 3 15
+
+    if odt2txt "$file1" > "$ft1" 2>/dev/null && \
+        odt2txt "$file2" > "$ft2" 2>/dev/null
+    then
+
+        if $DIFF_PROGRAM -L "$label1" -L "$label2" $opts "$ft1" "$ft2"
+        then
+            # no text change
+            if diff -q "$file1" "$file2"; then
+                : # no change at all
+            else
+                echo "OpenDocument files $file1 and $file2 files differ" \
+                    "(same text content)"
+            fi
         fi
-    fi
-
-    if [ -d "$file1" ]; then
-	# Be recursive.
-	# echo "entering $file1"
-	for file in "$file1"/*
-	do
-	    "$0" $opts "$file" $(echo "$file" | sed "s@^$file1/@$file2/@")
-	done
-
     else
-	ft1=$(mktemp /tmp/oodiff.$$.1.XXXXXXXXXX) \
-	    || ft1="/tmp/oodiff.$$.1"
-
-	ft2=$(mktemp /tmp/oodiff.$$.2.XXXXXXXXXX) \
-	    || ft2="/tmp/oodiff.$$.2"
-
-	trap 'clean_up; exit 0' 1 2 3 15
-
-	if odt2txt "$file1" > "$ft1" 2>/dev/null && \
-	   odt2txt "$file2" > "$ft2" 2>/dev/null
-	then
-
-	    if $DIFF_PROGRAM -L "$file1" -L "$file2" $opts "$ft1" "$ft2"
-	    then
-		# no text change
-		if diff -q "$file1" "$file2"; then
-		    : # no change at all
-		else
-		    echo "OpenDocument files $file1 and $file2 files differ" \
-			 "(same text content)"
-		fi
-	    fi
-	else
-	    $DIFF_PROGRAM $opts "$file1" "$file2"
-	fi
-
-	clean_up
+        $DIFF_PROGRAM $opts -L "$label1" -L "$label2" "$file1" "$file2"
     fi
+
+    clean_up
 }
 
 Main "$@"
